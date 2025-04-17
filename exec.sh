@@ -1,0 +1,1 @@
+sudo env HOTSPOT_SSID="MyHotspot" HOTSPOT_PASSWORD="yourpassword1234" ./enable_hotspot.sh
