@@ -13,9 +13,6 @@ if [ -z "$HOTSPOT_SSID" ] || [ -z "$HOTSPOT_PASSWORD" ]; then
   exit 1
 fi
 
-# Install required packages if not already installed
-sudo apt-get update
-sudo apt-get install -y hostapd dnsmasq
 
 # Stop services if they're running
 sudo systemctl stop hostapd
