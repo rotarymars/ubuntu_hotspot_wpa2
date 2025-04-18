@@ -6,8 +6,6 @@
 # === Configurable variables ===
 IFACE="wlp8s0"
 CON_NAME="Hotspot"
-# HOTSPOT_SSID="MyHotspot"
-# HOTSPOT_PASSWORD="yourpassword1234"
 
 # Check if environment variables are set
 if [ -z "$HOTSPOT_SSID" ] || [ -z "$HOTSPOT_PASSWORD" ]; then
@@ -15,62 +13,52 @@ if [ -z "$HOTSPOT_SSID" ] || [ -z "$HOTSPOT_PASSWORD" ]; then
   exit 1
 fi
 
-# Check if the interface exists
-if ! nmcli device show "$IFACE" >/dev/null 2>&1; then
-  echo "Error: Interface $IFACE not found"
-  exit 1
-fi
+# Install required packages if not already installed
+sudo apt-get update
+sudo apt-get install -y hostapd dnsmasq
 
-# Check if interface is already in use
-if nmcli device show "$IFACE" | grep -q "GENERAL.STATE.*connected"; then
-  echo "Warning: Interface $IFACE is currently connected to a network"
-  echo "Disconnecting current connection..."
-  nmcli device disconnect "$IFACE"
-  # Wait for interface to be fully disconnected
-  sleep 5
-fi
+# Stop services if they're running
+sudo systemctl stop hostapd
+sudo systemctl stop dnsmasq
 
-# 1) Turn off the regular Wi‑Fi radio
-sudo nmcli radio wifi off
-sleep 2
+# Configure hostapd
+cat << EOF | sudo tee /etc/hostapd/hostapd.conf
+interface=$IFACE
+driver=nl80211
+ssid=$HOTSPOT_SSID
+hw_mode=g
+channel=6
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+wpa_passphrase=$HOTSPOT_PASSWORD
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+EOF
 
-# 2) Delete any old Hotspot profile (ignore errors if it doesn't exist)
-sudo nmcli connection delete "$CON_NAME" 2>/dev/null
+# Configure dnsmasq
+cat << EOF | sudo tee /etc/dnsmasq.conf
+interface=$IFACE
+dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
+EOF
 
-# 3) Create a new Wi‑Fi connection profile with the SSID
-sudo nmcli connection add \
-  type wifi ifname "$IFACE" con-name "$CON_NAME" autoconnect yes \
-  ssid "$HOTSPOT_SSID"
+# Configure network interface
+sudo ifconfig $IFACE 192.168.4.1 netmask 255.255.255.0
 
-# 4) Configure AP mode, band, and IPv4 sharing
-sudo nmcli connection modify "$CON_NAME" \
-  802-11-wireless.mode ap \
-  802-11-wireless.band bg \
-  ipv4.method shared
+# Start services
+sudo systemctl unmask hostapd
+sudo systemctl enable hostapd
+sudo systemctl start hostapd
+sudo systemctl start dnsmasq
 
-# 5) Enforce WPA2‑PSK with AES encryption
-sudo nmcli connection modify "$CON_NAME" \
-  wifi-sec.key-mgmt wpa-psk
-sudo nmcli connection modify "$CON_NAME" \
-  wifi-sec.proto rsn
-sudo nmcli connection modify "$CON_NAME" \
-  wifi-sec.pairwise ccmp
-sudo nmcli connection modify "$CON_NAME" \
-  wifi-sec.group ccmp
-sudo nmcli connection modify "$CON_NAME" \
-  wifi-sec.psk "$HOTSPOT_PASSWORD"
+# Enable IP forwarding
+echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward
 
-# 6) Turn on Wi-Fi radio
-sudo nmcli radio wifi on
-sleep 2
-
-# 7) Activate the hotspot
-if ! nmcli connection up "$CON_NAME"; then
-  echo "Error: Failed to activate hotspot"
-  # Show detailed device status for debugging
-  echo "Current device status:"
-  sudo nmcli device show "$IFACE"
-  exit 1
-fi
+# Configure NAT
+sudo iptables -t nat -A POSTROUTING -o $IFACE -j MASQUERADE
 
 echo "Hotspot '$HOTSPOT_SSID' has been created and activated successfully"
+echo "Devices should now be able to connect to the WiFi network"
